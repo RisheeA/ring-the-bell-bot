@@ -4,31 +4,22 @@
 import TelegramBot from 'node-telegram-bot-api';
 import 'dotenv/config';
 
-// =============================================================================
-// CONFIGURATION
-// =============================================================================
-
 const CONFIG = {
   TELEGRAM_TOKEN: process.env.TELEGRAM_TOKEN,
   GROUP_CHAT_ID: process.env.GROUP_CHAT_ID,
 };
 
-// =============================================================================
-// STORAGE
-// =============================================================================
-
-// Pending submissions: `${chatId}-${userId}` -> { step, data }
 const pendingSubmissions = new Map();
-
-// =============================================================================
-// BOT INITIALIZATION
-// =============================================================================
 
 const bot = new TelegramBot(CONFIG.TELEGRAM_TOKEN, { polling: true });
 
-// =============================================================================
-// COMMAND: /ringthebell
-// =============================================================================
+// Escape HTML special characters
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 
 bot.onText(/\/ringthebell/, async (msg) => {
   const chatId = msg.chat.id;
@@ -44,14 +35,10 @@ bot.onText(/\/ringthebell/, async (msg) => {
   });
   
   bot.sendMessage(chatId, 
-    `🔔 *Ring the Bell!*\n\nLet's announce your update.\n\n*Step 1/4:* What's the feature name?`,
-    { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
+    `🔔 <b>Ring the Bell!</b>\n\nLet's announce your update.\n\n<b>Step 1/4:</b> What's the feature name?`,
+    { parse_mode: 'HTML', reply_to_message_id: msg.message_id }
   );
 });
-
-// =============================================================================
-// HANDLE FORM RESPONSES
-// =============================================================================
 
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
@@ -70,8 +57,8 @@ bot.on('message', async (msg) => {
       pending.data.featureName = text;
       pending.step = 'description';
       bot.sendMessage(chatId,
-        `*Step 2/4:* What does it do? (Brief description)`,
-        { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
+        `<b>Step 2/4:</b> What does it do? (Brief description)`,
+        { parse_mode: 'HTML', reply_to_message_id: msg.message_id }
       );
       break;
     
@@ -79,8 +66,8 @@ bot.on('message', async (msg) => {
       pending.data.description = text;
       pending.step = 'improvements';
       bot.sendMessage(chatId,
-        `*Step 3/4:* What improvements were made? (What's new/better)`,
-        { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
+        `<b>Step 3/4:</b> What improvements were made? (What's new/better)`,
+        { parse_mode: 'HTML', reply_to_message_id: msg.message_id }
       );
       break;
     
@@ -88,8 +75,8 @@ bot.on('message', async (msg) => {
       pending.data.improvements = text;
       pending.step = 'type';
       bot.sendMessage(chatId,
-        `*Step 4/4:* What type of update?\n\nReply with a number:\n1️⃣ New Feature\n2️⃣ Bug Fix\n3️⃣ Improvement\n4️⃣ Maintenance`,
-        { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
+        `<b>Step 4/4:</b> What type of update?\n\nReply with a number:\n1️⃣ New Feature\n2️⃣ Bug Fix\n3️⃣ Improvement\n4️⃣ Maintenance`,
+        { parse_mode: 'HTML', reply_to_message_id: msg.message_id }
       );
       break;
     
@@ -114,11 +101,11 @@ bot.on('message', async (msg) => {
       pending.data.type = selected;
       pending.step = 'confirm';
       
-      const preview = formatAnnouncement(pending.data, false);
+      const preview = formatAnnouncement(pending.data);
       
       bot.sendMessage(chatId,
-        `*Preview:*\n\n${preview}\n\n*Send this announcement?*\n\nReply: Y to send, N to cancel`,
-        { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
+        `<b>Preview:</b>\n\n${preview}\n\n<b>Send this announcement?</b>\n\nReply: Y to send, N to cancel`,
+        { parse_mode: 'HTML', reply_to_message_id: msg.message_id }
       );
       break;
     
@@ -126,11 +113,11 @@ bot.on('message', async (msg) => {
       const answer = text.trim().toLowerCase();
       
       if (answer === 'y' || answer === 'yes') {
-        const announcement = formatAnnouncement(pending.data, true);
+        const announcement = formatAnnouncement(pending.data);
         const targetChat = CONFIG.GROUP_CHAT_ID || chatId;
         
         await bot.sendMessage(targetChat, announcement, { 
-          parse_mode: 'Markdown',
+          parse_mode: 'HTML',
           disable_web_page_preview: true
         });
         
@@ -148,31 +135,26 @@ bot.on('message', async (msg) => {
   }
 });
 
-// =============================================================================
-// FORMAT ANNOUNCEMENT
-// =============================================================================
+function formatAnnouncement(data) {
+  const featureName = escapeHtml(data.featureName);
+  const description = escapeHtml(data.description);
+  const improvements = escapeHtml(data.improvements);
+  const submittedBy = escapeHtml(data.submittedBy);
+  
+  return `🔔🔔🔔 <b>RING THE BELL</b> 🔔🔔🔔
 
-function formatAnnouncement(data, includePing) {
-  const message = `🔔🔔🔔 *RING THE BELL* 🔔🔔🔔
+${data.type.emoji} <b>${data.type.label}</b>
 
-${data.type.emoji} *${data.type.label}*
+<b>${featureName}</b>
 
-*${data.featureName}*
+📝 <b>What it does:</b>
+${description}
 
-📝 *What it does:*
-${data.description}
+✨ <b>What's new:</b>
+${improvements}
 
-✨ *What's new:*
-${data.improvements}
-
-_Shipped by @${data.submittedBy}_`;
-
-  return message;
+<i>Shipped by @${submittedBy}</i>`;
 }
-
-// =============================================================================
-// COMMAND: /cancel
-// =============================================================================
 
 bot.onText(/\/cancel/, async (msg) => {
   const key = `${msg.chat.id}-${msg.from.id}`;
@@ -183,15 +165,7 @@ bot.onText(/\/cancel/, async (msg) => {
   }
 });
 
-// =============================================================================
-// ERROR HANDLING
-// =============================================================================
-
 bot.on('polling_error', console.error);
 process.on('unhandledRejection', console.error);
-
-// =============================================================================
-// STARTUP
-// =============================================================================
 
 console.log('🔔 Ring the Bell Bot - Online');
