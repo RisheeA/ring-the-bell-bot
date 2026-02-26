@@ -10,14 +10,14 @@ import 'dotenv/config';
 
 const CONFIG = {
   TELEGRAM_TOKEN: process.env.TELEGRAM_TOKEN,
-  GROUP_CHAT_ID: process.env.GROUP_CHAT_ID, // Your dev group chat ID
+  GROUP_CHAT_ID: process.env.GROUP_CHAT_ID,
 };
 
 // =============================================================================
 // STORAGE
 // =============================================================================
 
-// Pending submissions: userId -> { step, data }
+// Pending submissions: `${chatId}-${userId}` -> { step, data }
 const pendingSubmissions = new Map();
 
 // =============================================================================
@@ -33,9 +33,9 @@ const bot = new TelegramBot(CONFIG.TELEGRAM_TOKEN, { polling: true });
 bot.onText(/\/ringthebell/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
+  const key = `${chatId}-${userId}`;
   
-  // Start the form flow
-  pendingSubmissions.set(userId, {
+  pendingSubmissions.set(key, {
     step: 'feature_name',
     data: {
       submittedBy: msg.from.username || msg.from.first_name,
@@ -57,17 +57,15 @@ bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const text = msg.text;
+  const key = `${chatId}-${userId}`;
   
-  // Skip commands
   if (!text || text.startsWith('/')) return;
   
-  // Check if user has pending submission
-  const pending = pendingSubmissions.get(userId);
+  const pending = pendingSubmissions.get(key);
   if (!pending) return;
   
   switch (pending.step) {
     
-    // Step 1: Feature name
     case 'feature_name':
       pending.data.featureName = text;
       pending.step = 'description';
@@ -77,7 +75,6 @@ bot.on('message', async (msg) => {
       );
       break;
     
-    // Step 2: Description
     case 'description':
       pending.data.description = text;
       pending.step = 'improvements';
@@ -87,124 +84,68 @@ bot.on('message', async (msg) => {
       );
       break;
     
-    // Step 3: Improvements
     case 'improvements':
       pending.data.improvements = text;
       pending.step = 'type';
-      
-      const keyboard = {
-        inline_keyboard: [
-          [
-            { text: '🚀 New Feature', callback_data: 'type_feature' },
-            { text: '🐛 Bug Fix', callback_data: 'type_bugfix' },
-          ],
-          [
-            { text: '⚡ Improvement', callback_data: 'type_improvement' },
-            { text: '🔧 Maintenance', callback_data: 'type_maintenance' },
-          ],
-        ]
-      };
-      
       bot.sendMessage(chatId,
-        `*Step 4/4:* What type of update is this?`,
-        { parse_mode: 'Markdown', reply_markup: keyboard, reply_to_message_id: msg.message_id }
+        `*Step 4/4:* What type of update?\n\nReply with a number:\n1️⃣ New Feature\n2️⃣ Bug Fix\n3️⃣ Improvement\n4️⃣ Maintenance`,
+        { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
       );
       break;
+    
+    case 'type':
+      const typeMap = {
+        '1': { emoji: '🚀', label: 'New Feature' },
+        '2': { emoji: '🐛', label: 'Bug Fix' },
+        '3': { emoji: '⚡', label: 'Improvement' },
+        '4': { emoji: '🔧', label: 'Maintenance' },
+      };
+      
+      const selected = typeMap[text.trim()];
+      
+      if (!selected) {
+        bot.sendMessage(chatId,
+          `Please reply with 1, 2, 3, or 4`,
+          { reply_to_message_id: msg.message_id }
+        );
+        return;
+      }
+      
+      pending.data.type = selected;
+      pending.step = 'confirm';
+      
+      const preview = formatAnnouncement(pending.data, false);
+      
+      bot.sendMessage(chatId,
+        `*Preview:*\n\n${preview}\n\n*Send this announcement?*\n\nReply: Y to send, N to cancel`,
+        { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
+      );
+      break;
+    
+    case 'confirm':
+      const answer = text.trim().toLowerCase();
+      
+      if (answer === 'y' || answer === 'yes') {
+        const announcement = formatAnnouncement(pending.data, true);
+        const targetChat = CONFIG.GROUP_CHAT_ID || chatId;
+        
+        await bot.sendMessage(targetChat, announcement, { 
+          parse_mode: 'Markdown',
+          disable_web_page_preview: true
+        });
+        
+        bot.sendMessage(chatId, '✅ Bell rung! Announcement sent.', { reply_to_message_id: msg.message_id });
+        pendingSubmissions.delete(key);
+        
+      } else if (answer === 'n' || answer === 'no') {
+        pendingSubmissions.delete(key);
+        bot.sendMessage(chatId, '❌ Cancelled.', { reply_to_message_id: msg.message_id });
+        
+      } else {
+        bot.sendMessage(chatId, 'Reply Y to send or N to cancel.', { reply_to_message_id: msg.message_id });
+      }
+      break;
   }
-});
-
-// =============================================================================
-// HANDLE TYPE SELECTION
-// =============================================================================
-
-bot.on('callback_query', async (query) => {
-  const userId = query.from.id;
-  const chatId = query.message.chat.id;
-  
-  const pending = pendingSubmissions.get(userId);
-  if (!pending || pending.step !== 'type') return;
-  
-  const typeMap = {
-    'type_feature': { emoji: '🚀', label: 'New Feature' },
-    'type_bugfix': { emoji: '🐛', label: 'Bug Fix' },
-    'type_improvement': { emoji: '⚡', label: 'Improvement' },
-    'type_maintenance': { emoji: '🔧', label: 'Maintenance' },
-  };
-  
-  const selected = typeMap[query.data];
-  pending.data.type = selected;
-  
-  // Remove keyboard
-  bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
-    chat_id: chatId,
-    message_id: query.message.message_id
-  });
-  
-  // Show preview
-  const preview = formatAnnouncement(pending.data, false);
-  
-  const confirmKeyboard = {
-    inline_keyboard: [
-      [
-        { text: '✅ Ring the Bell!', callback_data: 'confirm_send' },
-        { text: '❌ Cancel', callback_data: 'confirm_cancel' },
-      ],
-    ]
-  };
-  
-  bot.sendMessage(chatId,
-    `*Preview:*\n\n${preview}\n\n_Send this announcement?_`,
-    { parse_mode: 'Markdown', reply_markup: confirmKeyboard }
-  );
-  
-  pending.step = 'confirm';
-  
-  bot.answerCallbackQuery(query.id);
-});
-
-// =============================================================================
-// HANDLE CONFIRMATION
-// =============================================================================
-
-bot.on('callback_query', async (query) => {
-  const userId = query.from.id;
-  const chatId = query.message.chat.id;
-  
-  const pending = pendingSubmissions.get(userId);
-  if (!pending || pending.step !== 'confirm') return;
-  
-  if (query.data === 'confirm_cancel') {
-    pendingSubmissions.delete(userId);
-    bot.editMessageText('❌ Cancelled.', {
-      chat_id: chatId,
-      message_id: query.message.message_id
-    });
-    bot.answerCallbackQuery(query.id);
-    return;
-  }
-  
-  if (query.data === 'confirm_send') {
-    // Format and send the announcement
-    const announcement = formatAnnouncement(pending.data, true);
-    
-    // Send to group with @everyone ping
-    const targetChat = CONFIG.GROUP_CHAT_ID || chatId;
-    
-    await bot.sendMessage(targetChat, announcement, { 
-      parse_mode: 'Markdown',
-      disable_web_page_preview: true
-    });
-    
-    // Confirm to user
-    bot.editMessageText('✅ Bell rung! Announcement sent.', {
-      chat_id: chatId,
-      message_id: query.message.message_id
-    });
-    
-    pendingSubmissions.delete(userId);
-  }
-  
-  bot.answerCallbackQuery(query.id);
 });
 
 // =============================================================================
@@ -212,9 +153,7 @@ bot.on('callback_query', async (query) => {
 // =============================================================================
 
 function formatAnnouncement(data, includePing) {
-  const ping = includePing ? '@everyone\n\n' : '';
-  
-  const message = `${ping}🔔🔔🔔 *RING THE BELL* 🔔🔔🔔
+  const message = `🔔🔔🔔 *RING THE BELL* 🔔🔔🔔
 
 ${data.type.emoji} *${data.type.label}*
 
@@ -236,35 +175,12 @@ _Shipped by @${data.submittedBy}_`;
 // =============================================================================
 
 bot.onText(/\/cancel/, async (msg) => {
-  const userId = msg.from.id;
+  const key = `${msg.chat.id}-${msg.from.id}`;
   
-  if (pendingSubmissions.has(userId)) {
-    pendingSubmissions.delete(userId);
+  if (pendingSubmissions.has(key)) {
+    pendingSubmissions.delete(key);
     bot.sendMessage(msg.chat.id, '❌ Cancelled.', { reply_to_message_id: msg.message_id });
   }
-});
-
-// =============================================================================
-// COMMAND: /help
-// =============================================================================
-
-bot.onText(/\/help/, async (msg) => {
-  const help = `🔔 *Ring the Bell Bot*
-
-*Commands:*
-/ringthebell - Announce a new feature or update
-/cancel - Cancel current submission
-/help - Show this message
-
-*How it works:*
-1. Run /ringthebell
-2. Answer 4 quick questions
-3. Preview your announcement
-4. Ring the bell!
-
-Your update gets posted with @everyone ping.`;
-
-  bot.sendMessage(msg.chat.id, help, { parse_mode: 'Markdown' });
 });
 
 // =============================================================================
@@ -278,13 +194,4 @@ process.on('unhandledRejection', console.error);
 // STARTUP
 // =============================================================================
 
-console.log(`
-╔════════════════════════════════════════════════════════════════════╗
-║            🔔 Ring the Bell Bot - Online                           ║
-╠════════════════════════════════════════════════════════════════════╣
-║  Commands:                                                         ║
-║    /ringthebell  - Start announcement flow                         ║
-║    /cancel       - Cancel submission                               ║
-║    /help         - Show help                                       ║
-╚════════════════════════════════════════════════════════════════════╝
-`);
+console.log('🔔 Ring the Bell Bot - Online');
