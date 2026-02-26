@@ -1,0 +1,5 @@
+# Telegram Bot Token (from @BotFather)
+TELEGRAM_TOKEN=your_telegram_bot_token
+
+# Group Chat ID to send announcements to (optional, defaults to same chat)
+GROUP_CHAT_ID=your_group_chat_id
